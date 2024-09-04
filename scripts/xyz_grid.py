@@ -447,6 +447,7 @@ class Script(scripts.Script):
                     vary_seeds_x = gr.Checkbox(label='Vary seeds for X', value=False, min_width=80, elem_id=self.elem_id("vary_seeds_x"), tooltip="Use different seeds for images along X axis.")
                     vary_seeds_y = gr.Checkbox(label='Vary seeds for Y', value=False, min_width=80, elem_id=self.elem_id("vary_seeds_y"), tooltip="Use different seeds for images along Y axis.")
                     vary_seeds_z = gr.Checkbox(label='Vary seeds for Z', value=False, min_width=80, elem_id=self.elem_id("vary_seeds_z"), tooltip="Use different seeds for images along Z axis.")
+                only_diagonal = gr.Checkbox(label='Only X/Y Diagonal', value=False, elem_id=self.elem_id("only_diagonal"))
             with gr.Column():
                 include_lone_images = gr.Checkbox(label='Include Sub Images', value=False, elem_id=self.elem_id("include_lone_images"))
                 include_sub_grids = gr.Checkbox(label='Include Sub Grids', value=False, elem_id=self.elem_id("include_sub_grids"))
@@ -533,9 +534,9 @@ class Script(scripts.Script):
             (z_values_dropdown, lambda params: get_dropdown_update_from_params("Z", params)),
         )
 
-        return [x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode]
+        return [x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode, only_diagonal]
 
-    def run(self, p, x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode):
+    def run(self, p, x_type, x_values, x_values_dropdown, y_type, y_values, y_values_dropdown, z_type, z_values, z_values_dropdown, draw_legend, include_lone_images, include_sub_grids, no_fixed_seeds, vary_seeds_x, vary_seeds_y, vary_seeds_z, margin_size, csv_mode, only_diagonal):
         x_type, y_type, z_type = x_type or 0, y_type or 0, z_type or 0  # if axle type is None set to 0
 
         if not no_fixed_seeds:
@@ -645,26 +646,48 @@ class Script(scripts.Script):
             ys = fix_axis_seeds(y_opt, ys)
             zs = fix_axis_seeds(z_opt, zs)
 
-        if x_opt.label == 'Steps':
-            total_steps = sum(xs) * len(ys) * len(zs)
-        elif y_opt.label == 'Steps':
-            total_steps = sum(ys) * len(xs) * len(zs)
-        elif z_opt.label == 'Steps':
-            total_steps = sum(zs) * len(xs) * len(ys)
+        if only_diagonal:
+            if x_opt.label == 'Steps':
+                total_steps = min(sum(xs), len(ys)) * len(zs)
+            elif y_opt.label == 'Steps':
+                total_steps = min(sum(ys), len(xs)) * len(zs)
+            elif z_opt.label == 'Steps':
+                total_steps = sum(zs) * min(len(xs), len(ys))
+            else:
+                total_steps = p.steps * min(len(xs), len(ys)) * len(zs)
         else:
-            total_steps = p.steps * len(xs) * len(ys) * len(zs)
+            if x_opt.label == 'Steps':
+                total_steps = sum(xs) * len(ys) * len(zs)
+            elif y_opt.label == 'Steps':
+                total_steps = sum(ys) * len(xs) * len(zs)
+            elif z_opt.label == 'Steps':
+                total_steps = sum(zs) * len(xs) * len(ys)
+            else:
+                total_steps = p.steps * len(xs) * len(ys) * len(zs)
 
         if isinstance(p, StableDiffusionProcessingTxt2Img) and p.enable_hr:
-            if x_opt.label == "Hires steps":
-                total_steps += sum(xs) * len(ys) * len(zs)
-            elif y_opt.label == "Hires steps":
-                total_steps += sum(ys) * len(xs) * len(zs)
-            elif z_opt.label == "Hires steps":
-                total_steps += sum(zs) * len(xs) * len(ys)
-            elif p.hr_second_pass_steps:
-                total_steps += p.hr_second_pass_steps * len(xs) * len(ys) * len(zs)
+            if only_diagonal:
+                if x_opt.label == "Hires steps":
+                        total_steps += min(sum(xs), len(ys)) * len(zs)
+                elif y_opt.label == "Hires steps":
+                    total_steps += min(sum(ys), len(xs)) * len(zs)
+                elif z_opt.label == "Hires steps":
+                    total_steps += sum(zs) * min(len(xs), len(ys))
+                elif p.hr_second_pass_steps:
+                    total_steps += p.hr_second_pass_steps * min(len(xs), len(ys)) * len(zs)
+                else:
+                    total_steps *= 2
             else:
-                total_steps *= 2
+                if x_opt.label == "Hires steps":
+                    total_steps += sum(xs) * len(ys) * len(zs)
+                elif y_opt.label == "Hires steps":
+                    total_steps += sum(ys) * len(xs) * len(zs)
+                elif z_opt.label == "Hires steps":
+                    total_steps += sum(zs) * len(xs) * len(ys)
+                elif p.hr_second_pass_steps:
+                    total_steps += p.hr_second_pass_steps * len(xs) * len(ys) * len(zs)
+                else:
+                    total_steps *= 2
 
         total_steps *= p.n_iter
 
@@ -705,6 +728,8 @@ class Script(scripts.Script):
         grid_infotext = [None] * (1 + len(zs))
 
         def cell(x, y, z, ix, iy, iz):
+            nonlocal only_diagonal
+
             if shared.state.interrupted or state.stopping_generation:
                 return Processed(p, [], p.seed, "")
 
@@ -725,7 +750,10 @@ class Script(scripts.Script):
                 pc.seed += iz * xdim * ydim
 
             try:
-                res = process_images(pc)
+                if only_diagonal and ix != iy:
+                    res = Processed(p, [], p.seed, "")
+                else:
+                    res = process_images(pc)
             except Exception as e:
                 errors.display(e, "generating image for xyz plot")
 
